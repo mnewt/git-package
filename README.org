@@ -1,0 +1,87 @@
+* use-package-git
+Install Emacs packages using [[https://github.com/jwiegley/use-package][use-package]] and [[https://git-scm.com/][git]].
+
+Add a =:git= keyword to a =use-package= declaration and the package will be automatically installed. =use-package-git= hooks into =use-package='s [[https://github.com/jwiegley/use-package#package-installation][:ensure]] mechanism to clone, byte compile, and add the package to the load path. Takes care of dependencies (via =package.el=), build commands, and Info files as well.
+
+** Usage Examples
+
+*** Simple
+
+Use a string value to install the latest revision of the repository's default branch.
+
+#+begin_src emacs-lisp
+(use-package eg
+  :ensure t
+  :git "https://github.com/mnewt/eg.el")
+#+end_src
+
+*** Advanced
+
+Use a [[https://www.gnu.org/software/emacs/manual/html_node/elisp/Property-Lists.html][Plist]] to specify package details.
+
+#+begin_src emacs-lisp
+(use-package eg
+  :ensure t
+  :git (eg
+        :url "https://github.com/mnewt/eg.el"
+        :dir "eg"
+        :files '("*.el" "another/dir/*.el")
+        :ref "tags/1.0"
+        :command "make"))
+#+end_src
+
+The properties are:
+**** (first element)
+If the first element is a symbol, then it will be used as the name of the package. Otherwise, the name from the =use-package= declaration is used. This is used to track the package and identify it (e.g. when running =use-package-git-upgrade-package=).
+**** =:url=
+The Git [[https://git-scm.com/book/en/v2/Git-Basics-Working-with-Remotes][Repository URL]]. Git will fetch the new and updated repository files from this URL.
+**** =:dir=
+The local directory where the files should be cloned. It is relative to the custom variable =use-package-git-user-dir=.
+**** =:files=
+The files which should be byte compiled. This can be specified as a string or list of strings. Glob style wildcards are accepted.
+**** =:ref=
+The Git [[https://git-scm.com/book/en/v2/Git-Internals-Git-References][Reference]]. A reference can be a commit [[https://git-scm.com/book/en/v2/Git-Basics-Viewing-the-Commit-History][hash]], [[https://git-scm.com/docs/git-tag][tag]], or [[https://git-scm.com/docs/git-branch][branch]].
+**** =:command=
+Run this command after cloning but before installing the package. This can be used to run build commands.
+
+** Commands
+*** =use-package-git-reinstall=
+Reinstall a package. It is useful mainly if you have modified some of the package files and you want Emacs to pick up the changes.
+*** =use-package-clean-unused=
+Delete any package directories in =use-package-git-user-dir= which have not been loaded using =use-package-git=.
+*** =use-package-git-upgrade=
+Upgrade a package. 
+*** =use-package-git-upgrade-all-packages=
+Upgrade all packages.
+
+** Installation
+*** Via MELPA
+#+begin_src emacs-lisp
+(use-package use-package-git
+  :ensure t
+  :config
+  (use-package-git-enable))
+#+end_src
+
+*** Manually
+Download =use-package-git.el= somewhere and load it.
+#+begin_src emacs-lisp
+(add-to-list 'load-path "path/to/use-package.el")
+(require 'use-package-git)
+(use-package-git-enable)
+#+end_src
+
+** Related packages
+Why make something new when there are already great alternatives out there? Because I can. Also, =use-package-git= is different in some key ways. I wanted something simple, fast, and targeted to the use cases I care about.
+
+In my highly informal testing, I have found that the =package.el=/=use-package-git= combination can be a second or more faster to load 200 packages than straight or quelpa.
+*** straight.el
+I used to use and still love straight.el but I wanted to do a couple things differently. For most packages I want to use =package.el=, which is well supported and fast. I don't want to tinker with most of my packages; when I do want to contribute to them, I'll create and configure a repo explicitly for that purpose. For those packages I'm working on, it's likely I'll want to check out a specific branch, tag, or commit. As of this writing, straight can't do that.
+*** quelpa
+Quelpa can do this but it is much more complex, slower, and not actively maintained. Also, many packages which aren't in ELPA/MELPA don't fully adhere to their the =package.el= specification. Quelpa doesn't handle those cases gracefully but this package tries to.
+
+** TODO
+*** Make the API usable outside of =use-package=.
+*** Make the logs in =*use-package-git*= useful.
+*** Test install and activation for other themes.
+*** Clean command should check if repo directories are clean before deleting them.
