@@ -1,0 +1,60 @@
+* Tasks
+** TODO Reduce number of required libraries
+** TODO Parallel install and upgrade
+** TODO Test install and activation for more themes.
+** TODO Clean command should check if repo directories are clean before deleting them.
+** TODO Organize functions, possibly move =git-package-use-package.el= into main file.
+** TODO Add =git-package-build-automatically=
+** TODO Get rid of =git-package--prepend-file-list=?
+** TODO Probably add =:autoload= keyword for package config to override the global setting?
+** TODO Improve test coverage for functional functions
+** TODO Improve test coverage for functions with side effects
+** DONE Implement logging
+   - State "DONE"       from "WIP"        [2020-01-16 Thu 11:51]
+   Switch from =shell-command= to =make-process=.
+
+** DONE Status buffer for install and upgrade operations
+   - State "DONE"       from "WIP"        [2020-01-16 Thu 11:51]
+** DONE Make the logs in =*git-package*= useful.
+   - State "DONE"       from "WIP"        [2020-01-16 Thu 11:52]
+** DONE Is adding =git= to Requires in the package header correct?
+   - State "DONE"       from "WIP"        [2020-01-06 Mon 08:41]
+Still not sure but going to assume it is not.
+** DONE Ensure =git-package= is included in =git-package-alist=
+   - State "DONE"       from "WIP"        [2020-01-05 Sun 21:48]
+** DONE Clone with =--depth 1=
+
+   - State "DONE"       from "TODO"       [2020-01-05 Sun 09:15]
+** DONE Ensure for all packages
+
+   - State "DONE"       from "WIP"        [2020-01-05 Sun 09:26]
+*** DONE Resolve package names properly
+    - State "DONE"       from "TODO"       [2020-01-05 Sun 08:35]
+*** DONE Add =git-package--find-elpa-recipe=
+
+    - State "DONE"       from "WIP"        [2020-01-05 Sun 08:33]
+*** DONE Add variable =git-package-dependency-ensure-method=
+    - State "DONE"       from "TODO"       [2020-01-05 Sun 08:39]
+Value is ='git-package= or ='package=.
+
+*** DONE Add variable =git-package-use-package-always-ensure=
+
+    - State "DONE"       from "TODO"       [2020-01-05 Sun 08:39]
+*** DONE Resolve deps using our own algorithm, not =package.el=
+    - State "DONE"       from "TODO"       [2020-01-05 Sun 08:41]
+    Always resolve deps using our own algorithm because =package.el='s breaks if there is no "Version" string. However, by default we should probably still install deps using =package.el=. The reasoning is that is probably what people expect.
+
+*** DONE Add =git-package--emacsmirror-recipe=
+
+    - State "DONE"       from "TODO"       [2020-01-05 Sun 09:19]
+** DONE Make :ref in normalized package optional
+   - State "DONE"       from "WIP"        [2020-01-05 Sun 09:30]
+** DONE Debug =git-package-use-package-always-ensure=
+   - State "DONE"       from "WIP"        [2020-01-05 Sun 21:33]
+Should be able to instrument =update-directory-autoloads=
+
+** DONE Fix this:
+   - State "DONE"       from "WIP"        [2020-01-05 Sun 21:45]
+#+begin_src emacs-lisp
+(git-package "https://github.com/mnewt/git-package")
+#+end_src

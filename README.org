@@ -138,6 +138,30 @@
 (git-package-setup-use-package)
 #+end_src
 
+** Requirements
+   - Emacs 24.3 and up
+   - Git 1.7.2.3 and up
+
+** Package State Flow Chart
+#+begin_src plantuml :file /tmp/plantuml.png
+start
+:(git-package 'foo);
+
+if (package foo is installed?) then (yes)
+else
+  :clone;
+  :ref;
+  :preparing;
+  :building;
+  :info;
+endif
+:activate;
+stop
+#+end_src
+
+#+RESULTS:
+[[file:/tmp/plantuml.png]]
+
 ** Related packages
    Why make something new when there are already great alternatives out there? Because I can. Also, =git-package= is different in some key ways. I wanted something simple, fast, and targeted to the use cases I care about.
 
@@ -147,9 +171,4 @@
     I used to use and still love straight.el but I wanted to do a couple things differently. For most packages I want to use =package.el=, which is well supported and fast. I don't want to tinker with most of my packages; when I do want to contribute to them, I'll create and configure a repo explicitly for that purpose. For those packages I'm working on, it's likely I'll want to check out a specific branch, tag, or commit. As of this writing, straight can't do that.
 
 *** quelpa
-    Quelpa can do this but it is much more complex, slower, and not actively maintained. Also, many packages which aren't in ELPA/MELPA don't fully adhere to the =package.el= specification. Quelpa doesn't handle those cases gracefully but this package makes an effort to do so.
-
-** TODO
-*** Make the logs in =*git-package*= useful.
-*** Test install and activation for more themes.
-*** Clean command should check if repo directories are clean before deleting them.
+    Quelpa can do this but it is much more complex, slower, and not actively maintained. Also, many packages which aren't in ELPA/MELPA don't fully adhere to the =package.el= specification. Quelpa doesn't handle those cases gracefully but this package does.

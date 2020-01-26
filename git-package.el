@@ -2,9 +2,8 @@
 
 ;; Author: Matthew Sojourner Newton
 ;; Maintainer: Matthew Sojourner Newton
-;; Version: 0.1
+;; Version: 0.2
 ;; Package-Requires: ((emacs "24.3"))
-;; Requires: ((git "1.7.2.3"))
 ;; Homepage: https://github.com/mnewt/git-package
 ;; Keywords: config package git
 
@@ -30,35 +29,89 @@
 ;; This package adds support for installing packages directly from git
 ;; repositories.
 
-;; For more information, see README.org.
+;; This file includes the minimum functionality necessary to load packages that
+;; have already been installed.  That way, on startup, we don't do any
+;; unnecessary work.
+
+;; For more information, see [[file:README.org]].
 
 ;;; Code:
-
-(require 'seq)
-(require 'cl-seq)
-(require 'package)
-(require 'info)
 
 
 ;;; Variables
 
+(defgroup git-package nil
+  "Install Emacs packages using git."
+  :group 'package
+  :prefix "git-package-")
+
 (defcustom git-package-user-dir (expand-file-name "git" user-emacs-directory)
   "Directory containing the user's git packages."
-  :group 'package
+  :group 'git-package
   :type 'string)
 
-(defcustom git-package-load-autoloads nil
+(defcustom git-package-load-autoloads t
   "If non-nil, then load the autoloads file when activating a package.
 
-This is not always necessary. Once the package is on `load-path'
-and/or `custom-theme-load-path', the package can be required,
-autoloads can be added manually. `use-package' can require the
-package and/or generate autoloads using keywords such as
-`:commands'."
-  :group 'package
+Autoloads for packages are convenient but if we want to really
+optimize startup time we can bypass them.  Once the package is on
+`load-path' and/or `custom-theme-load-path', the package can be
+required and autoloads can be added manually.  `use-package' can
+require the package and/or generate autoloads using keywords such
+as :bind, :commands, and :functions."
+  :group 'git-package
   :type 'boolean)
 
-(defvar git-package--packages nil
+(defcustom git-package-default-file-list
+  '("*.el" "*.el.in" "dir"
+    "*.info" "*.texi" "*.texinfo"
+    "doc/dir" "doc/*.info" "doc/*.texi" "doc/*.texinfo"
+    (:exclude ".dir-locals.el" "test.el" "tests.el" "*-test.el" "*-tests.el"))
+  "List of files to include in the install process.
+
+This is part of the MELPA spec.  See:
+https://github.com/melpa/melpa#recipe-format."
+  :group 'git-package
+  :type '(repeat string))
+
+(defcustom git-package-recipe-functions '(git-package-recipe-custom
+                                          git-package-recipe-cache
+                                          git-package-recipe-melpa
+                                          git-package-recipe-elpa
+                                          git-package-recipe-emacsmirror)
+  "List of functions to call in order to find recipes.
+
+Recipes are Plists that have enough information in them to be
+turned into normalized package configs.  Package configs are the
+data structure used throughout `git-package'.  See
+`git-package-normalize' for details."
+  :group 'git-package
+  :type '(repeat function))
+
+(defcustom git-package-recipe-alist nil
+  "Alist of recipes defined by the user.
+
+It is a list where CAR of each element is a package name (symbol)
+and CDR is a Plist.
+
+It looks like this:
+
+\((package-name :url \"https://to/package\"))"
+  :group 'git-package
+  :type '(repeat list))
+
+(defcustom git-package-fetcher-alist
+  '((github . "https://github.com/%s.git")
+    (gitlab . "https://gitlab.com/%s.git")
+    (bitbucket . "https://bitbucket.org/%s.git")
+    (savannah . "https://git.savannah.gnu.org/git/%s.git")
+    (orgmode . "https://code.orgmode.org/%s.git")
+    (sourcehut . "https://git.sr.ht/~%s"))
+  "Alist mapping fetchers to URL format strings."
+  :group 'git-package
+  :type '(repeat list))
+
+(defvar git-package-alist nil
   "Alist specifying packages ensured by `git-package'.
 
 CAR is the package's local name as a symbol.
@@ -66,188 +119,283 @@ CAR is the package's local name as a symbol.
 CDR is a Plist that contains the information needed to fetch the
 package via git.")
 
-(defvar git-package--read-package-history nil
-  "History for `git-package-upgrade' command.")
+(defvar git-package-recipe-cache-file
+  (expand-file-name "var/git-package--recipe-cache.el" user-emacs-directory)
+  "File used to cache package repository recipe entries.")
 
-(defvar git-package--byte-compile-ignore '("^\\..*" ".*-\\(pkg\\|autoloads\\)\\.el\\'")
-  "Ignore these files during byte compilation.
-
-This is a list of regular expressions.")
-
-(defvar git-package--buffer "*git-package*"
-  "Activity log for `git-package'.")
+(defvar git-package-recipe-cache nil
+  "Cache of previously used recipes.")
 
 
 ;;; Functions
 
-(defun git-package--shell-command (command)
-  "Run COMMAND and format the output in `git-package-buffer'."
-  (with-current-buffer git-package--buffer
-    (insert " > " command)
-    (let ((shell-command-dont-erase-buffer t))
-      (shell-command command git-package--buffer))
-    (insert "\n" (make-string 80 ?-) "\n")))
+(defun git-package--absolute-path (&rest paths)
+  "Assemble PATHS into an absolute path starting with `git-package-user-dir'."
+  (if (file-name-absolute-p (car paths))
+      (car paths)
+    (let ((new-path git-package-user-dir))
+      (dolist (path paths)
+        (setq new-path (concat (file-name-as-directory new-path) path)))
+      new-path)))
 
-(defun git-package--absolute-dir (dir)
-  "Ensure DIR is an absolute path."
-  (if (file-name-absolute-p dir)
-      dir
-    (expand-file-name dir git-package-user-dir)))
+(defun git-package-installed-p (name-or-config)
+  "Return non-nil if the package with NAME-OR-CONFIG is installed.
 
-(defun git-package--dirty-p (&optional dir)
-  "Return non-nil if the git repo DIR is dirty."
-  (not
-   (= 0 (length (shell-command-to-string
-                 (format "git -C '%s' status --porcelain"
-                         (expand-file-name (or dir default-directory))))))))
+NAME-OR-CONFIG can be a proper package config or a symbol."
+  (file-exists-p
+   (git-package--absolute-path
+    (plist-get (cond
+                ((consp name-or-config) name-or-config)
+                ((symbolp name-or-config) (git-package-normalize name-or-config)))
+               :dir))))
 
-(defun git-package--package-names ()
-  "List the package names activated by `git-package'."
-  (mapcar (lambda (p) (symbol-name (car p))) git-package--packages))
+(defun git-package-recipe-custom (name)
+  "Get a user defined recipe for package NAME.
 
-(defun git-package--byte-compile (dir files)
-  "Byte compile FILES in DIR.
+The recipe should be defined in the custom variable
+`git-package-recipe-alist'."
+  (assoc-default name git-package-recipe-alist))
 
-FILES is a list of relative paths to .el files. Wildcards will be
-expanded."
-  (let ((default-directory dir))
-    (dolist (file (seq-mapcat #'file-expand-wildcards files))
-      (unless (seq-some (lambda (re) (string-match-p re file))
-                        git-package--byte-compile-ignore)
-        (save-window-excursion
-          (with-demoted-errors (byte-compile-file file t)))))))
+(defun git-package-recipe-cache (name)
+  "Get a cached recipe for package NAME."
+  (when (and (null git-package-recipe-cache)
+             (file-exists-p git-package-recipe-cache-file))
+    (with-temp-buffer
+      (insert-file-contents-literally git-package-recipe-cache-file)
+      (setq git-package-recipe-cache (read (current-buffer)))))
+  (assoc-default name git-package-recipe-cache))
 
-(defun git-package--add-info-nodes (dir)
-  "If they exist, add Info nodes from DIR.
+(defun git-package-invalidate-cache ()
+  "Invalidate the recipe cache."
+  (setq git-package-recipe-cache nil)
+  (delete-file git-package-recipe-cache-file))
 
-This is the way `package.el' does it."
-  (when (file-exists-p (expand-file-name "dir" dir))
-    (require 'info)
-    (info-initialize)
-    (push dir Info-directory-list)))
+(autoload 'git-package-recipe-melpa "git-package-operations")
+(autoload 'git-package-recipe-elpa "git-package-operations")
+(autoload 'git-package-recipe-emacsmirror "git-package-operations")
 
-(defun git-package--read-package (prompt)
-  "PROMPT the user for a package name.
+(defun git-package--find-recipe (name)
+  "Find a recipe for package with NAME.
 
-Return the symbol"
-  (let ((package-names (mapcar (lambda (p) (symbol-name (plist-get (cdr p) :name)))
-                               git-package--packages)))
-    (intern (completing-read
-             (or prompt "Git package: ") package-names nil t
-             ;; Pre-select the current project if it was installed with
-             ;; `git-package'.
-             (when-let* ((project-dir (locate-dominating-file default-directory ".git"))
-                         (package (file-name-base (directory-file-name project-dir)))
-                         (member-p (member package package-names)))
-               package)
-             git-package--read-package-history))))
+A recipe is a partial package config."
+  (let ((fs git-package-recipe-functions)
+        recipe)
+    (while (and (null recipe) fs)
+      (setq recipe (funcall (pop fs) name)))
+    (when recipe
+      (add-to-list 'git-package-recipe-cache (cons name recipe))
+      (with-temp-file git-package-recipe-cache-file
+        (prin1 git-package-recipe-cache (current-buffer))))
+    recipe))
 
-(defun git-package--normalize (config &optional name)
-  "Turn CONFIG into a normalized Plist.
+(defun git-package--resolve-url (config)
+  "Resolve the URL for package with CONFIG."
+  (or (plist-get config :url)
+      (when-let ((repo (plist-get config :repo)))
+        (format (assoc-default (or (plist-get config :fetcher) 'github)
+                               git-package-fetcher-alist)
+                repo))))
 
-CONFIG is a string or Plist.
+(defun git-package--prepend-file (file dir)
+  "Prepend DIR to FILE.
 
-NAME is a symbol."
-  (let* ((config (cond
-                  ((stringp config) (list :url config))
-                  ((consp config)
-                   (cond
-                    ((stringp (car config))
-                     (apply #'list :url (car config) (cdr config)))
-                    ((keywordp (car config))
-                     config)
-                    (:else
-                     (setq name (car config))
-                     (cdr config))))))
-         (url (plist-get config :url))
-         (dir (or (plist-get config :dir)
-                  (replace-regexp-in-string "\\.git\\'" ""
-                                            (file-name-nondirectory url))))
-         (files (let ((d (plist-get config :files)))
-                  (cond
-                   ((stringp d) (list d))
-                   ((consp d) d)
-                   ((not d) '("*.el")))))
-         (ref (or (plist-get config :ref) "master"))
-         (name (or name (plist-get config :name) (intern dir))))
-    ;; Validate and assemble the config plist.
-    (if (and name
-             (symbolp name)
-             (stringp url)
-             (stringp dir)
-             (listp files)
-             (stringp ref))
-        (list :name name
-              :url url
-              :dir dir
-              :files files
-              :ref ref)
-      (user-error "CONFIG is not a string or a Plist with a :url key"))))
+See `git-package--prepend-file-list'."
+  (if (stringp file)
+      (concat (file-name-as-directory dir) file)
+    (if (eq (car file) :exclude)
+        (cons :exclude (git-package--prepend-file-list (cdr file) dir)))))
 
-(defun git-package--install (config)
-  "Install the package described by CONFIG."
-  (let* ((name (plist-get config :name))
-         (default-directory (git-package--absolute-dir (plist-get config :dir)))
-         (wc (current-window-configuration))
-         (pkg-desc (progn (dired default-directory)
-                          (with-demoted-errors (package-dir-info)))))
-    (when (package-desc-p pkg-desc)
-      ;; Download and install the dependencies using `package.el' if the above
-      ;; step successfully created a `package-desc'.
-      (let* ((requires (package-desc-reqs pkg-desc))
-             (transaction (package-compute-transaction nil requires)))
-        (package-download-transaction transaction)))
-    (when-let ((command (plist-get config :command)))
-      (compile command))
-    (package-generate-autoloads name default-directory)
-    (git-package--byte-compile default-directory (plist-get config :files))
-    (git-package--add-info-nodes default-directory)
-    (set-window-configuration wc)))
+(defun git-package--prepend-file-list (files dir)
+  "Prepend DIR to FILES.
 
-(defun git-package--activate (config)
+DIR is a string representing a subdirectory in a repository.
+
+FILES is a file list in the format of:
+https://github.com/melpa/melpa#recipe-format."
+  (if dir
+      (mapcar (lambda (file) (git-package--prepend-file file dir)) files)
+    files))
+
+(defun git-package-normalize (name &optional recipe)
+  "Return a normalized package config using the RECIPE and NAME.
+
+NAME the name of the package.  It is a symbol or nil.
+
+A RECIPE is all the information we need to build a normalized
+package config.
+
+RECIPE is:
+ - nil
+ - symbol
+ - string
+ - Plist
+ - Alist
+ - (nil)
+
+MELPA recipes are supported as input They look like this:
+
+\(<package-name>
+ :fetcher [git|github|gitlab|hg|bitbucket]
+ [:url \"<repo url>\"]
+ [:repo \"github-gitlab-or-bitbucket-user/repo-name\"]
+ [:commit \"commit\"]
+ [:branch \"branch\"]
+ [:version-regexp \"<regexp>\"]
+ [:files (\"<file1>\" ...)])
+
+Reference: https://github.com/melpa/melpa#recipe-format
+
+A normalized package config is all the information we need to
+obtain and set up a package.  The full normalized config looks
+like:
+
+\(:name <package-name>
+ :url \"<repo url>\"
+ :dir \"<repo-dir>\"
+ ;; optional:
+ :ref \"<commit-or-branch>\")
+ :files (\"<file1>\" ...)
+ :build \"command\")"
+  (when (not (equal recipe '(nil)))
+    (let* ((error-message (format "%s%s%s%S"
+                                  "git-package can't make a valid config from name "
+                                  name " and recipe " recipe))
+           (config
+            (cond
+             ;; `config' is nil so find the package by `name'.
+             ((null recipe)
+              (let ((c (git-package--find-recipe name)))
+                (if (keywordp (car c)) c (cdr c))))
+             ;; `config' is a symbol so override the package `name'.
+             ((symbolp recipe)
+              (setq name recipe)
+              (git-package--find-recipe name))
+             ;; `recipe' is a string so make that the `url'.
+             ((stringp recipe) (list :url recipe))
+             ;; The first element is a string. This is to support passing a
+             ;; string to `git-package', since `git-package' wraps all its
+             ;; arguments in a list.
+             ((stringp (car recipe))
+              (apply #'list :url (car recipe) (cdr recipe)))
+             ;; It's a Plist so keep it as is.
+             ((keywordp (car recipe))
+              recipe)
+             ;; We assume it's an Alist where car is `name' and cdr is a Plist.
+             ((symbolp (car recipe))
+              (setq name (car recipe))
+              (cdr recipe))))
+           (url (or (plist-get config :url)
+                    (git-package--resolve-url config)
+                    ;; We need a valid URL before proceeding.
+                    (user-error error-message)))
+           (dir (or (plist-get config :dir)
+                    (replace-regexp-in-string "\\.git\\'" ""
+                                              (file-name-nondirectory url))))
+           (subdir (plist-get config :subdir))
+           (files (let ((globs (plist-get config :files)))
+                    (git-package--prepend-file-list
+                     (if (stringp globs) (list globs) globs)
+                     subdir)))
+           (ref (or (plist-get config :ref)
+                    (plist-get config :branch)
+                    (plist-get config :commit)))
+           (name (or name (plist-get config :name) (intern dir))))
+      ;; Validate and assemble the config plist.
+      (if (and name
+               (symbolp name)
+               (stringp url)
+               (stringp dir)
+               (or (null subdir) (stringp subdir))
+               (or (null files) (listp files))
+               (or (null ref) (stringp ref)))
+          (let ((new-config (list :name name
+                                  :url url
+                                  :dir dir)))
+            (when subdir (setq new-config (append new-config (list :subdir subdir))))
+            (when files (setq new-config (append new-config (list :files files))))
+            (when ref (setq new-config (append new-config (list :ref ref))))
+            new-config)
+        (user-error error-message)))))
+
+(defun git-package--expand-file-list (config)
+  "Return an expanded list of files for package CONFIG.
+
+Wildards are expanded.  Exclusions are removed.  File paths are
+relative to :dir.
+
+:files (nil) means process no files.
+:files nil means use `git-package-default-file-list' for the file list."
+  (unless (equal (plist-get config :files) '(nil))
+    (let ((default-directory (git-package--absolute-path (plist-get config :dir)))
+          files exclude)
+      (mapc (lambda (file)
+              (if (and (consp file) (eq (car file) :exclude))
+                  (setq exclude (mapcan #'file-expand-wildcards (cdr file)))
+                (setq files (append files (file-expand-wildcards file)))))
+            (or (plist-get config :files) git-package-default-file-list))
+      (mapc (lambda (file) (setq files (delete file files)))
+            exclude)
+      ;; The main package file is likely to have the shortest file name so we
+      ;; make it first in the list.  This was an optimization for
+      ;; `git-package-subcommand-description' but it seemed generally useful.
+      (sort files (lambda (a b) (< (length a) (length b)))))))
+
+(defun git-package--load-paths (config)
+  "Return list of load paths for CONFIG."
+  (unless (equal (plist-get config :files) '(nil))
+    (let ((dir (plist-get config :dir))
+          paths)
+      (mapc (lambda (file)
+              (when (and (member (file-name-extension file t) load-suffixes))
+                (let ((path (file-name-directory file)))
+                  (when (not (member path paths))
+                    (push path paths)))))
+            (git-package--expand-file-list config))
+      (mapcar (lambda (path)
+                (git-package--absolute-path (concat path dir)))
+              paths))))
+
+(autoload 'info-initialize "info")
+
+(defun git-package-subtask-activate (config)
   "Activate the package described by CONFIG."
   (let* ((name (plist-get config :name))
          (name-string (symbol-name name))
          (dir (expand-file-name (plist-get config :dir) git-package-user-dir)))
     ;; Track the package
-    (add-to-list 'git-package--packages (cons name config))
+    (add-to-list 'git-package-alist (cons name config))
     ;; Add all directories specified by :files to the `load-path'.
-    (dolist (file (plist-get config :files))
-      (add-to-list 'load-path (file-name-directory (expand-file-name file dir))))
-    ;; KLUDGE: Add to `custom-theme-load-path' if we have a theme. All themes
-    ;; end in `-theme' or `theme.el', right?
+    (dolist (dir (git-package--load-paths config))
+      (add-to-list 'load-path dir))
+    ;; Add any Info files
+    (when (directory-files dir "*.info")
+      (info-initialize)
+      (add-to-list 'Info-directory-list dir))
+    ;; Add to `custom-theme-load-path' if we have a theme.
+    ;; KLUDGE All themes end in `-theme' or `theme.el', right?
     (when (or (string-suffix-p "-theme" name-string)
               (string-suffix-p "-theme.el" name-string))
       (add-to-list 'custom-theme-load-path dir))
-    ;; Load autoloads if we are instructed to do so.
+    ;; Load the autoloads file.
     (when git-package-load-autoloads
       (load (expand-file-name (concat name-string "-autoloads.el") dir) t t))))
 
+(autoload 'git-package-do "git-package-tasks")
+
 (defun git-package-ensure (config)
   "Ensure that a git package described by CONFIG is installed."
-  (let* ((config (git-package--normalize config))
-         (name (plist-get config :name))
-         (dir (expand-file-name (plist-get config :dir) git-package-user-dir)))
-    (unless (file-exists-p dir)
-      (message "git-package is cloning package %s..." name)
-      (shell-command (format "git -C '%s' clone '%s' '%s'"
-                             git-package-user-dir
-                             (plist-get config :url)
-                             dir)
-                     "*git-package*")
-      ;; Check out the ref (should work for branch, hash, or tag).
-      (when-let (ref (plist-get config :ref))
-        (shell-command (format "git -C %s checkout %s" dir ref) "*git-package*"))
-      (git-package--install config))
-    (git-package--activate config)
-    name))
+  (when config
+    (if (git-package-installed-p config)
+        (git-package-subtask-activate config)
+      (git-package-do 'install config))
+    (plist-get config :name)))
 
 
 ;;; Commands
 
 ;;;###autoload
-(defun git-package (&rest config)
-  "Ensure that the git package described by CONFIG is installed.
+(defun git-package (&rest recipe)
+  "Ensure that the git package described by RECIPE is installed.
 
 Add the package to the `load-path', and, if it's a theme, to
 `custom-theme-load-path'.
@@ -255,104 +403,7 @@ Add the package to the `load-path', and, if it's a theme, to
 Load the package's autoloads if `git-package-autoloads' is non-nil.
 
 CONFIG is a string or Plist with at least a :url key."
-  (git-package-ensure (git-package--normalize config)))
-
-;;;###autoload
-(defun git-package-delete (config)
-  "Delete package described by CONFIG."
-  (interactive (list (completing-read "Delete package: "
-                                      (git-package--package-names)
-                                      nil t)))
-  (delete-directory (expand-file-name (plist-get config :dir))))
-
-;;;###autoload
-(defun git-package-delete-unused ()
-  "Delete unused packages in `git-package-user-dir'.
-
-Unused packages are defined as directories on disk in the
-`git-package-user-dir' that have not been activated in the
-current Emacs session using `git-package'."
-  (interactive)
-  (let* ((active (mapcar (lambda (p) (plist-get (cdr p) :dir))
-                         git-package--packages))
-         (on-disk (directory-files git-package-user-dir nil "^[^.]+.*" t))
-         (unused (cl-set-difference on-disk active :test #'string=)))
-    (when (yes-or-no-p (format "Delete packages: %s? " unused))
-      (dolist (dir unused)
-        (message "Deleting git package: %s..." dir)
-        (delete-directory (expand-file-name dir git-package-user-dir) t t))
-      (message "Done."))))
-
-;;;###autoload
-(defun git-package-install (url)
-  "Install a PACKAGE from a git URL."
-  (interactive "sInstall package from git url: ")
-  (let ((name (git-package url)))
-    (message "Package %s is installed." (symbol-name name))))
-  
-;;;###autoload
-(defun git-package-reinstall (package)
-  "Re-install PACKAGE.
-
-You may want to re-install the package after you modify the source files.
-
-Note that this does not fetch changes from the git repository if
-the package if it is already installed. For that, use
-`git-package-upgrade'."
-  (interactive (list (git-package--read-package "Reinstall git package: ")))
-  (let ((config (alist-get package git-package--packages)))
-    (git-package--install config)
-    (git-package--activate config)))
-
-;;;###autoload
-(defun git-package-upgrade (package)
-  "Upgrade PACKAGE.
-
-PACKAGE is a symbol, which should be a key in `git-package--packages'.
-
-Checkout the :ref, fetch changes, and reinstall the package."
-  (interactive (list (git-package--read-package "Upgrade git package: ")))
-  (let* ((config (alist-get package git-package--packages))
-         (default-directory (expand-file-name (plist-get config :dir)
-                                              git-package-user-dir)))
-    (message "git-package upgrading package %s..." (plist-get config :name))
-    ;; Delete automatically generated files so the repo doesn't appear dirty (at
-    ;; least not because of `git-package').
-    (shell-command "rm -f *.elc *-pkg.el *-autoloads.el" "*git-package*")
-    (when (or (not (git-package--dirty-p))
-              (while (cl-case (downcase
-                               (read-key (concat
-                                          "The package `"
-                                          (symbol-name (plist-get config :name))
-                                          "' with local repo at ["
-                                          default-directory
-                                          "] is dirty."
-                                          " Choose an action:\n"
-                                          "[R]eset to HEAD and continue"
-                                          " (changes will be lost!)\n"
-                                          "[S]kip fetching and continue\n"
-                                          "[A]bort\n"
-                                          "? ")))
-                       (?r (unless (= 0 (shell-command "git reset HEAD --hard"))
-                             (error "Resetting the repo at %s failed"
-                                    default-directory)))
-                       (?s nil)
-                       (?a (user-error "Aborted package upgrade"))
-                       (_ t))))
-      (shell-command (format "git checkout %s" (plist-get config :ref))
-                     "*git-package*")
-      (shell-command "git fetch" "*git-package*"))
-    (git-package--install config)))
-
-;;;###autoload
-(defun git-package-upgrade-all-packages ()
-  "Upgrade all git ensured packages."
-  (interactive)
-  (message "Upgrading all git-package packages...")
-  (dolist (package git-package--packages)
-    (git-package-upgrade (car package)))
-  (message "Upgrading all git-package packages...done."))
-
+  (git-package-ensure (git-package-normalize nil recipe)))
 
 (provide 'git-package)
 

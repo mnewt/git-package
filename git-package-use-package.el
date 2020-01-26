@@ -1,16 +1,5 @@
 ;;; git-package-use-package.el --- Git support for use-package -*- lexical-binding: t -*-
 
-;; Author: Matthew Sojourner Newton
-;; Maintainer: Matthew Sojourner Newton
-;; Version: 0.1
-;; Package-Requires: ((emacs "24.3") (use-package "2.0"))
-;; Requires: ((git "1.7.2.3"))
-;; Homepage: https://github.com/mnewt/git-package
-;; Keywords: config package git
-
-
-;; This file is not part of GNU Emacs
-
 ;; This file is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation; either version 3, or (at your option)
@@ -29,10 +18,10 @@
 
 ;; This package adds support for installing git packages using `use-package'.
 
-;; When the :git keyword is specified and :ensure is non-nil, the given package
-;; will be cloned, byte compiled, and added to `load-path'.
+;; When the :git keyword is specified the given package will be cloned,
+;; prepared, and added to `load-path'.
 
-;; For more information, see README.org.
+;; For more information, see [[file:README.org]].
 
 ;;; Code:
 
@@ -43,20 +32,19 @@
 
 ;;; Variables
 
-(defvar git-package--previous-ensure-function nil
-  "The previous value of `use-package-ensure-function'.")
+(defcustom git-package-use-package-always-ensure nil
+  "If non-nil, always install the package using git."
+  :group 'git-package
+  :type 'boolean)
 
 
 
 ;;; Functions
 
-(defun git-package--dispatch-ensure (name args state &optional no-refresh)
-  "Dispatch package NAME to the git and elpa ensure functions.))))))
-
-ARGS, STATE, and NO-REFRESH are passed through."
-  (unless (plist-get state :ensured)
-    (use-package-ensure-elpa name args state no-refresh)))
-
+(defun git-package-use-package-default (name args)
+  "Prepare the default value for the :git keyword using NAME and ARGS."
+  (git-package-normalize name (plist-get args :git)))
+                                     
 (defun use-package-normalize/:git (name keyword args)
   "Normalize the :git property list for package NAME.
 
@@ -68,8 +56,8 @@ list of one."
   (use-package-only-one (symbol-name keyword) args
     (lambda (_label config)
       (condition-case-unless-debug nil
-          (git-package--normalize config name)
-        (use-package-error ":git wants a string or a Plist with a :url key")))))
+          (when config (git-package-normalize name config))
+        (use-package-error ":git wants a string or a Plist")))))
 
 (defun use-package-handler/:git (name _keyword config rest state)
   "Simply return `body' of package NAME.
@@ -95,9 +83,10 @@ NAME and REST are passed to `use-package-process-keywords'."
 (defun git-package-setup-use-package ()
   "Enable the :git keyword in `use-package'."
   (add-to-list 'use-package-keywords :git)
-  (setq git-package--previous-ensure-function use-package-ensure-function)
-  (setq use-package-ensure-function #'git-package--dispatch-ensure)
-  (make-directory git-package-user-dir t))
+  (make-directory git-package-user-dir t)
+  (add-to-list 'use-package-defaults
+               '(:git git-package-use-package-default
+                      git-package-use-package-always-ensure)))
 
 (provide 'git-package-use-package)
 
