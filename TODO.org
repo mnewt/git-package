@@ -1,14 +1,37 @@
 * Tasks
-** TODO Reduce number of required libraries
-** TODO Parallel install and upgrade
-** TODO Test install and activation for more themes.
+** WIP Parallel install and upgrade
 ** TODO Clean command should check if repo directories are clean before deleting them.
-** TODO Organize functions, possibly move =git-package-use-package.el= into main file.
-** TODO Add =git-package-build-automatically=
+** TODO Add =git-package-reinstall=
+Wire it up in the *Git Packages* buffer.
+** TODO Organize functions
+** TODO Add =git-package-build-automatically= defcustom
 ** TODO Get rid of =git-package--prepend-file-list=?
-** TODO Probably add =:autoload= keyword for package config to override the global setting?
+** TODO Add =:autoload= keyword for package config to override the global setting
+=git-package-load-autoloads=
+** TODO Add package info display like =package= I guess
 ** TODO Improve test coverage for functional functions
 ** TODO Improve test coverage for functions with side effects
+** TODO Test install and activation for more themes.
+** TODO Cache autoloads into single file so we don't have to load 200
+** TODO Pass =git-package-user-directory= to async functions
+** TODO Add =:info= to specify info files
+** DONE Remove support for =:files '(nil)=
+   - State "DONE"       from "WIP"        [2020-02-15 Sat 22:27]
+** DONE Break each task into separate functions:
+   - State "DONE"       from "WIP"        [2020-01-30 Thu 11:06]
+ - [X] git-package-subtask-clone 
+ - [X] git-package-subtask-pull
+ - [X] git-package-subtask-checkout
+ - [X] git-package-subtask-build
+ - [X] git-package-subtask-description
+ - [X] git-package-subtask-dependencies
+ - [X] git-package-subtask-byte-compile
+ - [X] git-package-subtask-autoloads
+ - [X] git-package-subtask-info
+ - [X] git-package-subtask-activate
+ - [X] git-package-subtask-notify
+** DONE Reduce number of required libraries
+   - State "DONE"       from "WIP"        [2020-01-29 Wed 12:54]
 ** DONE Implement logging
    - State "DONE"       from "WIP"        [2020-01-16 Thu 11:51]
    Switch from =shell-command= to =make-process=.

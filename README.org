@@ -77,7 +77,7 @@
      The Git [[https://git-scm.com/book/en/v2/Git-Basics-Working-with-Remotes][Repository URL]]. Git will fetch the new and updated repository files from this URL.
 
 **** =:dir=
-     The local directory where the files should be cloned. It is relative to the custom variable =git-package-user-dir=.
+     The local directory where the files should be cloned. It is relative to the custom variable =git-package-user-directory=.
 
 **** =:files=
      The files which should be byte compiled. This can be specified as a string or list of strings. Glob style wildcards are accepted.
@@ -96,7 +96,7 @@
     Reinstall a package. It is useful mainly if you have modified some of the package files and you want Emacs to pick up the changes. All you have to do is =M-x git-package-reinstall RET= and the package is byte compiled, autoloads are generated, and it is reloaded.
 
 *** =git-package-clean-unused=
-    Delete any package directories in =git-package-user-dir= which have not been loaded using =git-package=.
+    Delete any package directories in =git-package-user-directory= which have not been loaded using =git-package=.
 
 *** =git-package-upgrade=
     Upgrade a package.
