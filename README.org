@@ -1,3 +1,9 @@
+#+TITLE: git-package
+
+* Abandoned
+
+  =git-package= has been abandoned. I recommend you use [[https://github.com/raxod502/straight.el][straight.el]] instead.
+
 * git-package
   A fast and simple way to install and manage Emacs packages from [[https://git-scm.com/][git]] repositories.
 
@@ -89,6 +95,7 @@
      Run a shell command in the package directory after cloning and before installing the package. This can be used to run build commands.
 
 ** Commands
+
 *** =git-package-install=
     Check if a package is installed and install it if not.
 
@@ -111,7 +118,7 @@
     #+begin_src emacs-lisp
     (let ((dir (expand-file-name "git/git-package" user-emacs-directory)))
       (unless (file-exists-p dir)
-        (make-directory dir)
+        (make-directory dir 'parents)
         (shell-command
          (format "git clone https://github.com/mnewt/git-package '%s'" dir)))
       (add-to-list 'load-path dir)
@@ -150,6 +157,9 @@
     Quelpa can do this but it is much more complex, slower, and not actively maintained. Also, many packages which aren't in ELPA/MELPA don't fully adhere to the =package.el= specification. Quelpa doesn't handle those cases gracefully but this package makes an effort to do so.
 
 ** TODO
+
 *** Make the logs in =*git-package*= useful.
+
 *** Test install and activation for more themes.
+
 *** Clean command should check if repo directories are clean before deleting them.
