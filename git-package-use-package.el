@@ -1,5 +1,9 @@
 ;;; git-package-use-package.el --- Git support for use-package -*- lexical-binding: t -*-
 
+;; Copyright © 2020 Matthew Sojourner Newton
+;;
+;; Author: Matthew Sojourner Newton <matt@mnewton.com>
+
 ;; This file is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation; either version 3, or (at your option)
@@ -23,13 +27,13 @@
 
 ;; For more information, see [[file:README.org]].
 
+
 ;;; Code:
 
 (require 'git-package)
 (require 'use-package-ensure)
 
 
-
 ;;; Variables
 
 (defcustom git-package-use-package-always-ensure nil
@@ -38,12 +42,11 @@
   :type 'boolean)
 
 
-
 ;;; Functions
 
 (defun git-package-use-package-default (name args)
   "Prepare the default value for the :git keyword using NAME and ARGS."
-  (git-package-normalize name (plist-get args :git)))
+  (git-package--normalize name (plist-get args :git)))
                                      
 (defun use-package-normalize/:git (name keyword args)
   "Normalize the :git property list for package NAME.
@@ -56,22 +59,20 @@ list of one."
   (use-package-only-one (symbol-name keyword) args
     (lambda (_label config)
       (condition-case-unless-debug nil
-          (when config (git-package-normalize name config))
+          (when config (git-package--normalize name config))
         (use-package-error ":git wants a string or a Plist")))))
 
+;; TODO Should we add to STATE?
 (defun use-package-handler/:git (name _keyword config rest state)
   "Simply return `body' of package NAME.
 
-STATE is updated to tell `git-package--dispatch-ensure' that this
-package is already ensured and does not need to dispatch to
-`ensure'.
+CONFIG is the PList containing the normalized (using
+`git-package--normalize') `git-package' configuration.
 
-CONFIG is the PList containing the git configuration.
-
-NAME and REST are passed to `use-package-process-keywords'."
-  (let* ((state (plist-put state :ensured t))
-         (body (use-package-process-keywords name rest state)))
-    ;; We use the same logic as `use-package-handler/:ensure'.
+NAME, REST, and STATE are passed to
+`use-package-process-keywords' without modification."
+  (let* ((body (use-package-process-keywords name rest state)))
+    ;; Use the same logic as `use-package-handler/:ensure'.
     (if (bound-and-true-p byte-compile-current-file)
         ;; Eval when byte-compiling,
         (git-package-ensure config)
@@ -82,11 +83,11 @@ NAME and REST are passed to `use-package-process-keywords'."
 ;;;###autoload
 (defun git-package-setup-use-package ()
   "Enable the :git keyword in `use-package'."
-  (add-to-list 'use-package-keywords :git)
-  (make-directory git-package-user-dir t)
-  (add-to-list 'use-package-defaults
-               '(:git git-package-use-package-default
-                      git-package-use-package-always-ensure)))
+  (make-directory git-package-user-directory t)
+  (add-to-list 'use-package-defaults '(:git git-package-use-package-default
+                                       git-package-use-package-always-ensure))
+  (add-to-list 'use-package-keywords :git))
+
 
 (provide 'git-package-use-package)
 

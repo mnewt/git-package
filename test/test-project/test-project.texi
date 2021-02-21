@@ -1,0 +1,49 @@
+\input texinfo    @c -*- texinfo -*-
+@c %**start of header
+@setfilename test-project.info
+@settitle 
+@documentencoding UTF-8
+@documentlanguage en
+@c %**end of header
+
+@finalout
+@titlepage
+@title 
+@author Matthew Sojourner Newton
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top 
+@end ifnottex
+
+@menu
+* Title::
+
+@detailmenu
+--- The Detailed Node Listing ---
+
+Title
+
+* Subtitle::
+
+@end detailmenu
+@end menu
+
+@node Title
+@unnumbered Title
+
+Some words
+
+@menu
+* Subtitle::
+@end menu
+
+@node Subtitle
+@unnumberedsec Subtitle
+
+Some more words
+
+@bye

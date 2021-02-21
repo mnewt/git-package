@@ -1,10 +1,8 @@
 ;;; git-package-tasks.el --- Git Package Tasks -*- lexical-binding: t -*-
 
-;; Author: Matthew Sojourner Newton
-;; Maintainer: Matthew Sojourner Newton
-
-
-;; This file is not part of GNU Emacs
+;; Copyright © 2020 Matthew Sojourner Newton
+;;
+;; Author: Matthew Sojourner Newton <matt@mnewton.com>
 
 ;; This file is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -47,7 +45,10 @@ assured that the correct :ref is available to checkout."
   :type 'string)
 
 (defcustom git-package-subtask-alist
-  '((clone
+  '((display
+     :description "Starting"
+     :function git-package-subtask-display-package-list)
+    (clone
      :description "Cloning"
      :function git-package-subtask-clone)
     (pull
@@ -69,23 +70,34 @@ assured that the correct :ref is available to checkout."
      :description "Waiting for Dependencies")
     (missing
      :description "Missing Dependency")
-    (prepare
-     :description "Preparing"
-     :function git-package-subtask-prepare)
+    (byte-compile
+     :description "Byte Compiling Elisp"
+     :function git-package-subtask-byte-compile)
+    (autoloads
+     :description "Generating Autoloads"
+     :function git-package-subtask-autoloads)
+    (info
+     :description "Generating Info Files"
+     :function git-package-subtask-makeinfo)
     (activate
      :description "Activating"
      :function git-package-subtask-activate)
     (notify
      :description "Notifying Dependents"
      :function git-package-subtask-notify))
-  "Alist of possible states a package can be in."
+  "Alist of tasks to perform on a package."
   :group 'git-package
   :type 'list)
 
 (defcustom git-package-task-alist
-  '((clone clone)
-    (install clone checkout build description dependencies prepare activate)
-    (upgrade pull build dependencies info prepare activate))
+  '((activate activate)
+    (clone display clone)
+    (install display clone checkout build description
+     dependencies byte-compile autoloads info activate notify)
+    (reinstall display build description dependencies)
+    byte-compile autoloads info activate notify
+    (upgrade display pull build description dependencies
+     byte-compile autoloads info activate))
   "Alist of tasks and their associated subtasks.
 
 CAR is the tasks.
@@ -137,16 +149,34 @@ should be kept to a minimum.")
 (defvar git-package--read-package-history nil
   "History for `git-package-upgrade' command.")
 
+(defvar git-package-recipe-elpa
+  '(:name elpa
+    :url "https://git.savannah.gnu.org/git/emacs/elpa.git"
+    :dir "elpa")
+  "The recipe for ELPA.")
+
+(defvar git-package-recipe-melpa
+  '(:name melpa
+    :url "https://github.com/melpa/melpa.git"
+    :dir "melpa")
+  "The recipe for MELPA.")
+
+(defvar git-package-recipe-emacsmirror
+  '(:name epkgs
+    :url "https://github.com/emacsmirror/epkgs.git"
+    :dir "epkgs")
+  "The recipe for Emacsmirror.")
+
 (defgroup git-package-faces nil
   "Faces used by Git Package."
   :group 'git-package
   :group 'faces)
 
-(defface git-package-entry'((t (:inherit link)))
+(defface git-package-entry '((t (:inherit link)))
   "Face for `git-package' buffer sections."
   :group 'git-package-faces)
 
-(defface git-package-log-entry '((t (:inherit font-lock-keyword-face)))
+(defface git-package-log-entry '((t (:inherit font-lock-type-face)))
   "Face for `git-package' log messages.")
 
 (defface git-package-command '((t (:inherit org-verbatim)))
@@ -158,14 +188,15 @@ should be kept to a minimum.")
 (declare-function shell-mode "shell")
 
 (defun git-package--log-buffer (&optional name)
-  "Return a log buffer associated with NAME, creating it if necessary.
+  "Return the log buffer associated with NAME, creating it if necessary.
 
 If NAME is non-nil, return the buffer for that NAME.
 
 If NAME is nil, return the main log buffer."
-  (let ((buffer-name (concat "*git-package-"
-                             (when name (concat (symbol-name name) "-"))
-                             "log*")))
+  (let* ((name (cond ((null name) "")
+                     ((stringp name) name)
+                     ((symbolp name) (symbol-name name))))
+         (buffer-name (concat "*git-package-" (when name (concat name "-")) "log*")))
     (or (get-buffer buffer-name)
         (let ((buffer (get-buffer-create buffer-name)))
           (with-current-buffer buffer
@@ -197,10 +228,14 @@ face, then the the MESSAGE will be printed in that face."
   "Make a `tabulated-list' entry for CONFIG."
   (let ((name (plist-get config :name)))
     (vector
+     ;; Name
      (cons (symbol-name name) '(action git-package-goto-log))
+     ;; Status
      (or (plist-get git-package-subtask-alist
                     (car (assoc-default name git-package--queue)))
-         (if (git-package-installed-p config) "Installed" "Error")))))
+         (if (git-package-installed-p config) "Installed" "Error"))
+     ;; Version
+     (or (plist-get config :version) "--"))))
 
 (defun git-package--update-tabulated-list-entry (name)
   "Update the entry in `tabulated-list-entries' for NAME."
@@ -220,51 +255,45 @@ face, then the the MESSAGE will be printed in that face."
            git-package-alist))
     (tabulated-list-print t t)))
 
-;; WIP
-(defun git-package--next-subtask (config)
-  "Start the next subtask for CONFIG.
+(defun git-package--separate-result (string)
+  "Separate result form from STRING and return them both."
+  (let ((result ""))
+     (when-let* ((d0-beg (string-match "\0\0" string))
+                 (d0-end (match-end 0))
+                 (d1-beg (or (string-match "\0\1" string d0-beg)
+                             (length string)))
+                 (d1-end (match-end 0)))
+       (setq result (concat result (substring string d0-end d1-beg)))
+       (setq string (concat (substring string 0 d0-beg)
+                            (substring string d1-end))))
+     (when-let ((d1-beg (string-match "\0\1" string))
+                (d1-end (match-end 0)))
+       (setq result (concat result (substring string 0 d1-beg)))
+       (setq string (substring string d1-end)))
+     (cons string result)))
 
-This function only has an effect if CONFIG has an associated
-entry in `git-package--queue'."
-  (when-let* ((name (plist-get config :name))
-              (entry (assoc name git-package--queue)))
-    ;; Pop the current subtask off the queue.
-    (setcdr (assoc name git-package--queue)
-            (cdr (alist-get name git-package--queue)))
-    (if-let ((next-subtask (car (alist-get name git-package--queue))))
-        ;; If there is a subtask in the queue, start it.
-        (funcall
-         (plist-get (alist-get next-subtask git-package-subtask-alist) :function)
-         config)
-      ;; If there are no more subtasks, the task is complete.
-      (setq git-package--queue (assq-delete-all name git-package--queue))
-      (git-package--log name "Task complete for %s." name))
-    ;; Update the *Git Packages* buffer.
-    (git-package--update-tabulated-list-entry name)))
-
-;; WIP
 (defun git-package--process-filter (process string)
   "Respond when PROCESS receives STRING.
 
 Print log output to the PROCESS log buffer.
 
-Accumulate values surrounded by null bytes.
-`git-package--process-sentinel' will send those those to the
-handler."
-  (when (buffer-live-p (process-buffer process))
-    (with-current-buffer (process-buffer process)
-      (let ((moving (= (point) (process-mark process))))
-        (save-excursion
-          ;; Insert the text, advancing the process marker.
-          (goto-char (process-mark process))
-          (insert string)
-          (set-marker (process-mark process) (point)))
-        ;; TODO Extract a form enclosed by null bytes and attach it to the
-        ;; process.
-        (when-let ((beg (string-match "\0\0" string)))
-          (process-put :result (concat (process-get :result))))
-        (when moving (goto-char (process-mark process)))))))
-
+Accumulate a :result string which will later be passed to
+:handler by `git-package--process-sentinel' will send those those
+to the handler."
+  (let* ((separated (git-package--separate-result string))
+         (string (car separated))
+         (result (cdr separated)))
+    (process-put process :result (concat (process-get process :result) result))
+    (when (buffer-live-p (process-buffer process))
+      (with-current-buffer (process-buffer process)
+        (let ((moving (= (point) (process-mark process))))
+          (save-excursion
+            ;; Insert the text, advancing the process marker.
+            (goto-char (process-mark process))
+            (let ((inhibit-read-only t))
+              (insert string))
+            (set-marker (process-mark process) (point)))
+          (when moving (goto-char (process-mark process))))))))
 
 (defun git-package--process-sentinel (process event)
   "Respond when PROCESS receives EVENT.
@@ -273,27 +302,21 @@ If a handler is specified in the process Plist, call it.
 
 If the process is part of `git-package--queue', start the next
 subtask."
-  (let* ((name (process-get process :name))
+  (let* ((coding-system-for-read 'utf-8-auto)
+         (name (process-get process :name))
          (config (alist-get name git-package-alist))
          (description (format "Subtask %s for package %s "
                               (car (alist-get name git-package--queue))
                               name)))
     (cond
      ((and (eq 'exit (process-status process)) (= 0 (process-exit-status process)))
-      (git-package--log name (concat description event))
+      ;; If there is a handler attached, pass it the result.
       (when-let ((handler (process-get process :handler)))
-        ;; When `git-package--async-process' is called with a property for
-        ;; :handler, that function is called with the process output in string
-        ;; form.
-        (with-current-buffer (process-buffer process)
-          (let ((default-directory (git-package--absolute-path
-                                    (or (plist-get config :dir)
-                                        (process-get process :dir)
-                                        git-package-user-dir))))
-            (funcall handler
-                     (buffer-substring-no-properties
-                      (process-get process :start)
-                      (marker-position (process-mark process)))))))
+        (condition-case err
+            ;; :result is populated by `git-package--process-filter'.
+            (funcall handler (read (process-get process :result)))
+          (error (git-package--log name 'error "error in handler: %s" err))))
+      (git-package--log name (concat description event))
       (git-package--next-subtask config))
      ;; Something bad happened. Stop the task.  TODO Give the user a better
      ;; indication of what went wrong and what to do about it.
@@ -311,11 +334,8 @@ which this is a wrapper.
 Arguments which are different are:
 
 :name NAME -- NAME is a name for the process, but is expected to
-be a symbol.  A log buffer is created based on NAME, and if it's
-nil then the main log buffer is used.
-
-:sentinel SENTINEL -- If non-nil, override the default SENTINEL,
-which is `git-package--process-sentinel'.
+be a symbol.  A log stdout is created based on NAME, and if it's
+nil then the main log stdout is used.
 
 :handler HANDLER -- If non-nil and the process exits normally,
 then call this function, whose single argument is a string which
@@ -328,35 +348,24 @@ so that the process sentinel can pick them up and use them as
 context when the process updates or finishes."
   (let* ((name (plist-get properties :name))
          (buffer (git-package--log-buffer name))
-         (process-name (concat "git-package-process"
-                               (when name (format "-%s" name))))
+         (process-name (concat "git-package-process" (when name (format "-%s" name))))
          (default-directory (if-let ((dir (plist-get properties :dir)))
                                 (git-package--absolute-path dir)
                               default-directory))
-         proc start)
+         proc)
     (git-package--log name 'git-package-command (mapconcat #'identity command " "))
-    ;; Save point so that later we know where the output for the process
-    ;; started.
-    ;; TODO Handle this with a filter instead.
-    (with-current-buffer buffer (setq start (point)))
     (setq proc (make-process :name process-name
-                             :buffer buffer :command command
-                             :sentinel (or (plist-get properties :sentinel)
-                                           #'git-package--process-sentinel)))
-    (set-process-plist proc (append `(:start ,start)
-                                    properties
-                                    (process-plist proc)))
+                             :buffer buffer
+                             :command command
+                             :connection-type 'pipe
+                             :coding 'utf-8-auto
+                             :filter #'git-package--process-filter
+                             :sentinel #'git-package--process-sentinel))
+    (set-process-plist proc (append properties (process-plist proc)))
     proc))
 
-(defun git-package--funcall-wrap-handler (handler)
-  "Read a response as an Elisp object and call HANDLER.
-
-HANDLER is given one argument: the object."
-  (lambda (response)
-    (funcall handler (read response))))
-
-(defun git-package--async-funcall (form &rest properties)
-  "Evaluate FORM in an inferior, asynchronous Emacs process.
+(defun git-package--async-funcall (function &rest properties)
+  "Call FUNCTION in an inferior, asynchronous Emacs process.
 
 PROPERTIES is a Plist.  It is used to store process state and for
 interprocess communication.  Special PROPERTIES include:
@@ -368,24 +377,29 @@ value as its argument.
 the inferior Emacs process.
 
 For more details, see `git-package--async-process'."
-  (let ((process
+  (let ((print-level nil)
+        (print-length nil)
+        (print-escape-nonascii t)
+        (print-circle t)
+        (process
          (apply #'git-package--async-process
                 `(,git-package-emacs-executable "--batch" "--quick"
-                  ,@(when-let ((dir (plist-get properties :dir)))
-                     (list "--chdir" (git-package--absolute-path dir)))
+                  "--eval" "(setq load-prefer-newer t)"
+                  ,@(when-let* ((dir (plist-get properties :dir))
+                                (dir (git-package--absolute-path dir)))
+                     `("--chdir" ,dir "--directory" ,dir))
                   "--load" ,(locate-library "git-package")
                   "--load" ,(locate-library "git-package-async")
                   "--funcall" "git-package-async-batch-pipe")
                 :name (plist-get properties :name)
-                :handler (when-let ((handler (plist-get properties :handler)))
-                           (git-package--funcall-wrap-handler handler))
                 properties))
-        (wrapped-form `(progn
-                         ,(mapcar (lambda (sym)
-                                    `(setq ,sym ',(symbol-value sym)))
-                           (plist-get properties :variables))
-                         ,form)))
-    (process-send-string process (concat (prin1-to-string wrapped-form) "\n"))
+        (form `(let ,(mapcar
+                      (lambda (sym) `(,sym ',(symbol-value sym)))
+                      (plist-get properties :variables))
+                (message "calling function...")
+                (funcall ',function))))
+    (process-send-string process (concat (prin1-to-string form) "\n"))
+    (process-send-eof process)
     process))
 
 (defun git-package--dirty-p (&optional dir)
@@ -393,10 +407,6 @@ For more details, see `git-package--async-process'."
   (not (= 0 (length (shell-command-to-string
                      (format "git -C '%s' status --porcelain"
                              (expand-file-name (or dir default-directory))))))))
-
-(defun git-package--package-names ()
-  "List the package names activated by `git-package'."
-  (mapcar (lambda (p) (symbol-name (car p))) git-package-alist))
 
 (defun git-package--read-package (prompt)
   "PROMPT the user for a package name.
@@ -414,44 +424,33 @@ Return the symbol"
                package)
              git-package--read-package-history))))
 
-(defun git-package--resolve-url (config)
-  "Resolve the URL for package NAME and CONFIG."
-  (cond
-   ((plist-get config :url)
-    (plist-get config :url))
-   ((plist-get config :repo)
-    (format
-     (assoc-default (or (plist-get config :fetcher) 'github) git-package-fetcher-alist)
-     (plist-get config :repo)))))
+(defun git-package-recipe-elpa (name)
+  "Get the recipe for package NAME from ELPA."
+  (if (eq name 'elpa)
+      git-package-recipe-elpa
+    (unless (file-directory-p (git-package--absolute-path "elpa"))
+      (git-package-do 'clone git-package-recipe-elpa 'normalized))
+    ;; FIXME Queue the rest of the work.
+    (let ((dir (git-package--absolute-path "elpa" "packages" (symbol-name name))))
+      (when (file-directory-p dir)
+        (append git-package-recipe-elpa (list :subdir (symbol-name name)))))))
 
 (defun git-package-recipe-melpa (name)
   "Get the recipe for package NAME from MELPA."
-  (let ((config '(:name melpa
-                  :url "https://github.com/melpa/melpa.git"
-                  :dir "melpa"))
-        (file (git-package--absolute-path "melpa" "recipes" (symbol-name name))))
-    (unless (git-package-installed-p config)
-      (git-package-do 'clone config))
-    (when (file-exists-p file)
-      (cons :name (car (with-temp-buffer
-                         (insert-file-contents-literally file)
-                         (read-from-string (buffer-string))))))))
-
-(defun git-package-recipe-elpa (name)
-  "Get the recipe for package NAME from ELPA."
-  (let ((elpa-base '(:name elpa
-                     :url "https://git.savannah.gnu.org/git/emacs/elpa.git"
-                     :dir "elpa"))
-        (dir (git-package--absolute-path "elpa" "packages" (symbol-name name))))
-    (git-package-ensure elpa-base)
-    (when (file-directory-p dir)
-      (append elpa-base (list :subdir (symbol-name name))))))
+  (if (eq name 'melpa)
+      git-package-recipe-melpa
+    (unless (file-directory-p (git-package--absolute-path "melpa"))
+      (git-package-do 'clone git-package-recipe-melpa 'normalized))
+    (let ((file (git-package--absolute-path "melpa" "recipes" (symbol-name name))))
+      (when (file-exists-p file)
+        (cons :name (car (with-temp-buffer
+                           (insert-file-contents-literally file)
+                           (read-from-string (buffer-string)))))))))
 
 (defun git-package-recipe-emacsmirror (name)
   "Get the recipe for package NAME from EmacsMirror."
-  (git-package-ensure '(:name epkgs
-                        :url "https://github.com/emacsmirror/epkgs.git"
-                        :dir "epkgs" :files (nil)))
+  (unless (file-directory-p (git-package--absolute-path "epkgs"))
+    (git-package-do 'clone git-package-recipe-emacsmirror 'normalized))
   (let ((name-string (symbol-name name)))
     (when (file-directory-p (git-package--absolute-path "epkgs" "mirror" name-string))
       (list :name name
@@ -472,25 +471,82 @@ Return the symbol"
                 name-or-config)))
     (plist-put (alist-get name git-package-alist) property value)))
 
+(defun git-package--next-subtask (config &optional current)
+  "Start the next subtask for CONFIG.
+
+If CURRENT is non-nil, call the current task rather than the next
+one.
+
+This function only has an effect if CONFIG has an associated
+entry in `git-package--queue'."
+  (when-let* ((name (plist-get config :name))
+              (entry (assoc name git-package--queue)))
+    (unless current
+      ;; Pop the current subtask off the queue.
+      (setcdr (assoc name git-package--queue)
+              (cdr (alist-get name git-package--queue))))
+    (if-let ((next-subtask (car (alist-get name git-package--queue))))
+        ;; If there is a subtask in the queue, start it.
+        (funcall
+         (plist-get (alist-get next-subtask git-package-subtask-alist) :function)
+         config)
+      ;; If there are no more subtasks, the task is complete.
+      (setq git-package--queue (assq-delete-all name git-package--queue))
+      (git-package--log name "Task complete for %s." name))
+    ;; Update the *Git Packages* buffer.
+    (git-package--update-tabulated-list-entry name)))
+
+(defun git-package-subtask-activate (config)
+  "Activate the package described by CONFIG."
+  (git-package-activate config)
+  (git-package--next-subtask config))
+
+(defun git-package-subtask-display-package-list (config)
+  "Display the Git Packages list buffer, continue CONFIG queue."
+  (pop-to-buffer (git-package--list-buffer))
+  (git-package--next-subtask config))
+
 (defun git-package-subtask-clone (config)
   "Clone the repository for CONFIG."
-  (git-package--async-process
-   `("git" "clone"
-     ;; If no :ref is specified, we can do a shallow clone. If a :ref is specified,
-     ;; we don't know whether it is a branch or commit so we have to do a full
-     ;; clone.
-     ,@(when (and git-package-shallow-clone (plist-get config :ref))
-        '("--depth" "1"))
-     ,(plist-get config :url)
-     ,(git-package--absolute-path (plist-get config :dir)))
-   :name (plist-get config :name)))
+  (unless (git-package-installed-p config)
+    (git-package--async-process
+     `("git" "clone"
+       ;; If no :ref is specified, we can do a shallow clone. If a :ref is
+       ;; specified, we don't know whether it is a branch or commit so we have
+       ;; to do a full clone, and that seems fine since asking for a :ref is a
+       ;; decent heuristic for whether the user wants to interact with the
+       ;; repository.
+       ,@(when (and git-package-shallow-clone (plist-get config :ref))
+          '("--depth" "1"))
+       ,(plist-get config :url)
+       ,(git-package--absolute-path config))
+     :name (plist-get config :name))))
 
+(defun git-package-subtask-pull (config)
+  "Pull the repository for CONFIG.
+
+Pull if the repo is clean.  We don't do any complicated
+fetch/merge because if the user wants that they should do it
+manually anyway.
+
+Nor do we check that we have the appropraite :ref checked out.
+If the user changed it then they know what they are doing and we
+will leave them alone."
+  (let ((dir (plist-get config :dir)))
+    (if (git-package--dirty-p dir)
+        (git-package--async-process
+         `("git" "-C" ,(git-package--absolute-path config)
+           "pull")
+         :name (plist-get config :name))
+      (git-package--log (plist-get config :name) "Repo is dirty so not pulling")
+      (git-package--next-subtask config))))
+
+;; TODO Should :ref, :branch, and :commit be treated the same?
 (defun git-package-subtask-checkout (config)
   "If appropriate, check a git ref for CONFIG."
   (if-let (ref (plist-get config :ref))
       (git-package--async-process
-       `("git"
-         "-C" ,(git-package--absolute-path (plist-get config :dir))
+       `("git" "-C" ,(git-package--absolute-path config)
          "checkout" ,ref)
        :name (plist-get config :name))
     (git-package--next-subtask config)))
@@ -503,11 +559,23 @@ Return the symbol"
        :name (plist-get config :name))
     (git-package--next-subtask config)))
 
+(defun git-package-subtask-makeinfo (config)
+  "Run build commands for CONFIG."
+  (if-let ((files (mapcan
+                   (lambda (dir)
+                     (directory-files dir t "\\.texi\\(?:nfo\\)?\\'" t))
+                   (git-package--load-paths config))))
+      (git-package--async-funcall
+       (lambda () (git-package-async-makeinfo config))
+       :name (plist-get config :name))
+    (git-package--next-subtask config)))
+
 (defun git-package-subtask-description (config)
   "Read package headers and add description elements to CONFIG."
   (let ((name (plist-get config :name)))
     (git-package--async-funcall
-     `(git-package-async-description ',config)
+     (lambda ()
+       (git-package-async-description config))
      :name name
      :handler
      (lambda (plist)
@@ -544,7 +612,7 @@ It can only be cleared by the user."
                   (push name-version missing)))
                (t
                 (push dep-name waiting)
-                (git-package-do 'install (git-package-normalize dep-name))))))
+                (git-package-do 'install (git-package--normalize dep-name))))))
           (plist-get config :dependencies))
     (cond
      (missing (git-package--log 'error "Package %s is missing dependencies %S"
@@ -555,64 +623,35 @@ It can only be cleared by the user."
       (push 'wait (alist-get name git-package--queue))
       (git-package-set config :missing waiting))))
 
-(defvar generated-autoload-file)
-(defvar autoload-timestamps)
-(defvar version-control)
-
-(declare-function autoload-rubric "autoload" (file &optional type feature))
-
-(defun git-package--generate-autoloads (config)
-  "Generate autoloads for CONFIG.
-
-Adapted from the one in `package.el'."
-  (let* ((package-dir (plist-get config :dir))
-         (auto-name (format "%s-autoloads.el" (plist-get config :name)))
-         ;;(ignore-name (concat name "-pkg.el"))
-         (generated-autoload-file (expand-file-name auto-name package-dir))
-         ;; We don't need 'em, and this makes the output reproducible.
-         (autoload-timestamps nil)
-         (backup-inhibited t)
-         (version-control 'never))
-    (unless (file-exists-p generated-autoload-file)
-      (require 'autoload)
-      (write-region (autoload-rubric generated-autoload-file "package" nil)
-                    nil generated-autoload-file nil 'silent))
-    (update-directory-autoloads (git-package--absolute-path package-dir))
-    (let ((buf (find-buffer-visiting generated-autoload-file)))
-      (when buf (kill-buffer buf)))
-    auto-name))
-
-;; WIP
-(defun git-package-subtask-compile (config)
+(defun git-package-subtask-byte-compile (config)
   "Compile the Emacs Lisp files for CONFIG."
-  (let ((name (plist-get config :name)))
-    (git-package--async-funcall
-     `(git-package-async-compile ',config)
-     :name name
-     ;; :variables '(load-path)
-     :handler
-     (lambda (_files)
-       (git-package--next-subtask config)))))
+  (git-package--async-funcall
+   (lambda () (git-package-async-byte-compile config))
+   :name (plist-get config :name)
+   :variables '(load-path)))
 
-;; TODO Break each task into separate functions:
-;; X dependencies
-;; - compile
-;; - autoloads
-;; - byte compile
-;; - info
-(defun git-package-subtask-prepare (config)
-  "Install the package described by CONFIG."
-  (save-window-excursion
-    (let* ((default-directory (git-package--absolute-path (plist-get config :dir)))
-           ;; Tell `update-directory-autoloads' to save to this file.
-           (generated-autoload-file
-            (expand-file-name (format "%s-autoloads.el" (plist-get config :name))
-                              default-directory)))
-      (git-package--ensure-dependencies config)
-      (when-let ((command (plist-get config :command))) (compile command))
-      (message "Writing autoload file: %s" generated-autoload-file)
-      (apply #'update-directory-autoloads (git-package--load-paths config))
-      (git-package--byte-compile config))))
+(defun git-package-subtask-autoloads (config)
+  "Generate the autoloads file for CONFIG."
+  (git-package--async-funcall
+   (lambda () (git-package-async-autoloads config))
+   :name (plist-get config :name)))
+
+(defun git-package-subtask-notify (config)
+  "Notify any packages waiting on CONFIG to be installed."
+  (let ((name (plist-get config :name)))
+    (mapc
+     (lambda (entry)
+       (when (and (eq 'wait (cadr entry))
+                  (let ((notified-package (alist-get (car entry) git-package-alist)))
+                    (member name (mapcar #'car
+                                         (plist-get notified-package :dependencies)))
+                    (git-package--log name
+                                      "Notifying package %s that %s is installed..."
+                                      (car entry)
+                                      name)
+                    (git-package--next-subtask notified-package)))))
+     git-package--queue)
+    (git-package--next-subtask config)))
 
 (defun git-package-list--id-predicate (a b)
   "Predicate to sort packages A and B using their name.
@@ -627,6 +666,13 @@ This is used for `tabulated-list-format' in `git-package-list-mode'."
 This is used for `tabulated-list-format' in `git-package-list-mode'."
   (string< (elt (cdr a) 1)
            (elt (cdr b) 1)))
+
+(defun git-package-list--version-predicate (a b)
+  "Predicate to sort packages A and B using their version.
+
+This is used for `tabulated-list-format' in `git-package-list-mode'."
+  (string< (elt (cdr a) 2)
+           (elt (cdr b) 2)))
 
 (defun git-package--list-buffer ()
   "Return the Git Package List buffer, creating it if necessary."
@@ -651,6 +697,15 @@ This is used for `tabulated-list-format' in `git-package-list-mode'."
                                                        (button-end button)))))
                    ((symbolp name-or-marker)
                     name-or-marker)))))
+
+(defun git-package-resume (package)
+  "Resume processing the tasks in queue for PACKAGE."
+  (interactive (list (intern (completing-read
+                              "Resume package: "
+                              (mapcar (lambda (e) (symbol-name (car e)))
+                                      git-package--queue)
+                              nil t))))
+  (git-package--next-subtask (alist-get package git-package-alist) 'resume))
 
 ;; (defvar git-package-list-mode-map
 ;;   (let ((map (make-sparse-keymap)))
@@ -682,8 +737,9 @@ beginning of the line."
   ;; TODO Update this when there are no more running processes.
   (setq mode-line-process '((git-package--queue ":Working"))
         tabulated-list-format
-        `[("Package" 24 git-package-list--id-predicate)
-          ("Status" 10 git-package-list--status-predicate)]
+        `[("Package" 22 git-package-list--id-predicate)
+          ("Status" 10 git-package-list--status-predicate)
+          ("Version" 10 git-package-list-version-predicate)]
         tabulated-list-sort-key '("Status"))
   (tabulated-list-init-header)
   (setq imenu-prev-index-position-function
@@ -699,49 +755,64 @@ beginning of the line."
   (git-package--update-tabulated-list-entries))
 
 ;;;###autoload
-(defun git-package-do (task config)
+(defun git-package-do (task config &optional normalized)
   "Perform TASK for the package described by CONFIG.
 
+If NORMALIZED is non-nil, assume the config is already normalized
+and don't do it again.
+
 See `git-package-task-alist' for the possible tasks."
-  (let ((name (plist-get config :name)))
+  (let ((config (if normalized config (git-package--normalize config)))
+        (name (plist-get config :name))
+        (task-list (alist-get task git-package-task-alist)))
     (add-to-list 'git-package-alist (cons name config))
-    (setcdr (assoc name git-package--queue)
-            (alist-get task git-package-task-alist))
+    ;; Delete any currently queued tasks, since the most likely reason for that
+    ;; is that something failed previously.  TODO Decide if this is the correct
+    ;; action.  Maybe prompt the user if the queue isn't empty.
+    (setq git-package--queue
+          (delete (assoc name git-package--queue) git-package--queue))
+    ;; Queue the tasks.
+    (push (cons name task-list) git-package--queue)
     (git-package--update-tabulated-list-entries)
-    (funcall (plist-get (alist-get (car (alist-get name git-package--queue))
-                                   git-package-subtask-alist) :function)
-             config)))
+    (git-package--next-subtask config t)))
 
 ;; Create `git-package-do-*' from `git-package-task-alist'.
-(mapc (lambda (task)
-        (eval
-         `(defun ,(intern (format "git-package-do-%s" task)) (config)
-           (format "Perform the %s task for the package described by CONFIG." task)
-           (git-package-do ',task config))))
-      (mapcar #'car git-package-task-alist))
+;; (mapc (lambda (task)
+;;         (eval
+;;          `(defun ,(intern (format "git-package-do-%s" task))
+;;               (config &optional normalized)
+;;            ,(format "Perform the %s task for the package described by CONFIG." task)
+;;            (git-package-do ',task config normalized))))
+;;       (mapcar #'car git-package-task-alist))
 
+;; TODO Indicate if the package is dirty.
 ;;;###autoload
-(defun git-package-delete (config)
-  "Delete the package described by CONFIG."
-  (interactive (list (completing-read "Delete package: "
-                                      (git-package--package-names)
-                                      nil t)))
-  (delete-directory (expand-file-name (plist-get config :dir)))
-  (setq git-package-alist
-        (assq-delete-all (plist-get config :name) git-package-alist)))
+(defun git-package-delete (name)
+  "Delete the package identified by NAME."
+  (interactive (list (intern (completing-read
+                              "Delete package: "
+                              (mapcar (lambda (p) (symbol-name (car p)))
+                                      git-package-alist)
+                              nil t))))
+  (let ((dir (plist-get (alist-get name git-package-alist) :dir)))
+    (when (or (not (git-package--dirty-p dir)
+                   (yes-or-no-p (format "Package %s is dirty, still delete?"
+                                        (plist-get config :name)))))
+      (delete-directory (git-package--absolute-path config) t)
+      (setq git-package-alist
+            (assq-delete-all (plist-get config :name) git-package-alist)))))
 
 ;;;###autoload
 (defun git-package-delete-unused ()
-  "Delete unused packages in `git-package-user-dir'.
+  "Delete unused packages in `git-package-user-directory'.
 
 Unused packages are defined as directories on disk in the
-`git-package-user-dir' that have not been activated in the
+`git-package-user-directory' that have not been activated in the
 current Emacs session using `git-package'."
   (interactive)
-  (require 'cl-seq)
   (let* ((active (mapcar (lambda (p) (plist-get (cdr p) :dir))
                          git-package-alist))
-         (on-disk (directory-files git-package-user-dir nil "^[^.]+.*" t))
+         (on-disk (directory-files git-package-user-directory nil "^[^.]+.*" t))
          (unused (cl-set-difference on-disk active :test #'string=)))
     (when (yes-or-no-p (format "Delete packages: %s? " unused))
       (dolist (dir unused)
@@ -749,7 +820,7 @@ current Emacs session using `git-package'."
                   (yes-or-no-p
                    (format "Repo for package %s is dirty, delete anyway? " dir)))
           (message "Deleting git package: %s..." dir)
-          (delete-directory (expand-file-name dir git-package-user-dir) t t)))
+          (delete-directory (expand-file-name dir git-package-user-directory) t t)))
       (message "Done."))))
 
 ;;;###autoload
@@ -769,10 +840,10 @@ Note that this does not fetch changes from the git repository if
 the package if it is already installed.  For that, use
 `git-package-upgrade'."
   (interactive (list (git-package--read-package "Reinstall git package: ")))
-  (let* ((package (if (stringp package) (intern package) package))
-         (config (alist-get package git-package-alist)))
-    (git-package-subtask-prepare config)
-    (git-package-subtask-activate config)))
+  (if-let* ((package (if (stringp package) (intern package) package))
+            (config (alist-get package git-package-alist)))
+      (git-package-do 'reinstall config)
+    (user-error "Package %s is not installed" package)))
 
 ;;;###autoload
 ;; TODO Re-do this to work asynchronously.
@@ -785,7 +856,7 @@ Checkout the :ref, fetch changes, and reinstall the package."
   (interactive (list (git-package--read-package "Upgrade git package: ")))
   (let* ((config (alist-get package git-package-alist))
          (default-directory (expand-file-name (plist-get config :dir)
-                                              git-package-user-dir))
+                                              git-package-user-directory))
          (name (plist-get config :name)))
     ;; Delete automatically generated files so the repo doesn't appear dirty (at
     ;; least not because of `git-package').
@@ -824,6 +895,7 @@ Checkout the :ref, fetch changes, and reinstall the package."
   (dolist (package git-package-alist)
     (git-package-upgrade (car package)))
   (message "Upgrading all git packages...done."))
+
 
 (provide 'git-package-tasks)
 
